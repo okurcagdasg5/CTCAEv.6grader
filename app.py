@@ -13,29 +13,49 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-.block-container {max-width: 980px; padding-top: 2rem;}
+.block-container {
+    max-width: 1000px;
+    padding-top: 2rem;
+}
+
+.grade-card {
+    border: 1px solid rgba(128,128,128,.28);
+    border-radius: 14px;
+    padding: 16px 18px;
+    margin: 10px 0;
+}
+
+.grade-title {
+    font-size: 1.15rem;
+    font-weight: 800;
+    margin-bottom: 8px;
+}
+
 .result-card {
-    border: 1px solid rgba(128,128,128,.30);
+    border: 2px solid rgba(128,128,128,.35);
     border-radius: 16px;
     padding: 22px;
-    margin-top: 12px;
+    margin-top: 16px;
 }
-.grade-number {
+
+.result-grade {
     font-size: 2.2rem;
-    font-weight: 800;
-    margin-bottom: .2rem;
+    font-weight: 900;
 }
+
 .small-muted {
-    opacity: .70;
+    opacity: .72;
     font-size: .92rem;
 }
 </style>
 """, unsafe_allow_html=True)
 
+
 def get_connection():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
 
 @st.cache_data
 def load_socs():
@@ -43,116 +63,227 @@ def load_socs():
         rows = conn.execute(
             "SELECT DISTINCT soc FROM ctcae ORDER BY soc"
         ).fetchall()
+
     return [r["soc"] for r in rows]
+
 
 @st.cache_data
 def load_terms(soc=None):
     with get_connection() as conn:
+
         if soc and soc != "All categories":
             rows = conn.execute(
-                "SELECT term FROM ctcae WHERE soc=? ORDER BY term", (soc,)
+                """
+                SELECT term
+                FROM ctcae
+                WHERE soc = ?
+                ORDER BY term
+                """,
+                (soc,)
             ).fetchall()
+
         else:
             rows = conn.execute(
-                "SELECT term FROM ctcae ORDER BY term"
+                """
+                SELECT term
+                FROM ctcae
+                ORDER BY term
+                """
             ).fetchall()
+
     return [r["term"] for r in rows]
+
 
 @st.cache_data
 def get_ae(term):
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT * FROM ctcae WHERE term=?", (term,)
+            """
+            SELECT *
+            FROM ctcae
+            WHERE term = ?
+            """,
+            (term,)
         ).fetchone()
+
     return dict(row) if row else None
 
+
 st.title("CTCAE v6.0 Grader")
-st.caption("NCI Common Terminology Criteria for Adverse Events — v6.0 / MedDRA 28.0")
+
+st.caption(
+    "NCI Common Terminology Criteria for Adverse Events "
+    "— v6.0 / MedDRA 28.0"
+)
 
 if not DB_PATH.exists():
     st.error("CTCAE database was not found.")
     st.stop()
 
-soc_options = ["All categories"] + load_socs()
+
 selected_soc = st.selectbox(
     "Category (SOC)",
-    soc_options,
-    help="Optional: narrow the list by CTCAE System Organ Class."
+    ["All categories"] + load_socs(),
+    help="Optional: filter adverse events by System Organ Class."
 )
 
-terms = load_terms(selected_soc)
+
 selected_term = st.selectbox(
     "Adverse Event",
-    options=terms,
+    options=load_terms(selected_soc),
     index=None,
     placeholder="Type to search for an adverse event…"
 )
 
+
 if selected_term:
+
     ae = get_ae(selected_term)
 
     st.divider()
+
     st.subheader(ae["term"])
+
     st.markdown(
-        f'<div class="small-muted">{ae["soc"]} · MedDRA LLT Code: {ae["meddra_code"]}</div>',
+        f"""
+        <div class="small-muted">
+        {ae["soc"]} · MedDRA LLT Code: {ae["meddra_code"]}
+        </div>
+        """,
         unsafe_allow_html=True
     )
 
-    if ae["definition"] and ae["definition"] != "-":
-        with st.expander("Definition"):
-            st.write(ae["definition"])
+
+    definition = (ae.get("definition") or "").strip()
+
+    if definition and definition != "-":
+
+        st.markdown("### Definition")
+
+        st.write(definition)
+
 
     criteria = []
+
     for grade in range(1, 6):
-        text = (ae.get(f"grade_{grade}") or "").strip()
-        if text and text != "-":
-            criteria.append({
-                "grade": grade,
-                "criterion": text,
-                "label": f"Grade {grade} — {text}"
-            })
+
+        criterion = (
+            ae.get(f"grade_{grade}") or ""
+        ).strip()
+
+        if criterion and criterion != "-":
+
+            criteria.append(
+                {
+                    "grade": grade,
+                    "criterion": criterion,
+                    "label": f"Grade {grade} — {criterion}"
+                }
+            )
+
+
+    st.markdown("### Official CTCAE v6.0 Grade Criteria")
+
 
     if not criteria:
-        st.warning("No grade criterion is available for this term in the database.")
-    else:
-        selected_criterion = st.selectbox(
-            "Patient value / clinical condition",
-            options=criteria,
-            index=None,
-            format_func=lambda x: x["label"],
-            placeholder="Select the matching CTCAE criterion…",
-            help="Choose the criterion that best matches the patient's finding."
+
+        st.warning(
+            "No grade criteria are available for this CTCAE term."
         )
 
-        if selected_criterion:
-            grade = selected_criterion["grade"]
-            criterion = selected_criterion["criterion"]
+    else:
+
+        for item in criteria:
 
             st.markdown(
                 f"""
-                <div class="result-card">
-                    <div class="small-muted">CTCAE v6.0 RESULT</div>
-                    <div class="grade-number">GRADE {grade}</div>
-                    <div><strong>Selected criterion:</strong><br>{criterion}</div>
+                <div class="grade-card">
+
+                    <div class="grade-title">
+                        GRADE {item["grade"]}
+                    </div>
+
+                    <div>
+                        {item["criterion"]}
+                    </div>
+
                 </div>
                 """,
                 unsafe_allow_html=True
             )
 
-    with st.expander("Show all grading criteria"):
-        for grade in range(1, 6):
-            criterion = (ae.get(f"grade_{grade}") or "").strip()
-            if criterion and criterion != "-":
-                st.markdown(f"**Grade {grade}:** {criterion}")
-            else:
-                st.markdown(f"**Grade {grade}:** —")
 
-    nav = (ae.get("navigational_note") or "").strip()
+        st.markdown("### Grade the Patient")
+
+
+        selected_criterion = st.selectbox(
+
+            "Patient value / clinical condition",
+
+            options=criteria,
+
+            index=None,
+
+            format_func=lambda x: x["label"],
+
+            placeholder="Select the matching CTCAE criterion…",
+
+            help=(
+                "Select the CTCAE criterion that best "
+                "matches the patient's finding."
+            )
+        )
+
+
+        if selected_criterion:
+
+            grade = selected_criterion["grade"]
+
+            criterion = selected_criterion["criterion"]
+
+
+            st.markdown(
+                f"""
+                <div class="result-card">
+
+                    <div class="small-muted">
+                        CTCAE v6.0 RESULT
+                    </div>
+
+                    <div class="result-grade">
+                        GRADE {grade}
+                    </div>
+
+                    <br>
+
+                    <strong>Selected criterion</strong>
+
+                    <br>
+
+                    {criterion}
+
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+
+    nav = (
+        ae.get("navigational_note") or ""
+    ).strip()
+
+
     if nav and nav != "-":
-        st.info(f"Navigational note: {nav}")
+
+        st.markdown("### Navigational Note")
+
+        st.info(nav)
+
 
 st.divider()
+
 st.caption(
-    "Reference aid only. Verify grading against the protocol, investigator assessment, "
-    "and the official NCI CTCAE v6.0 source before clinical-trial reporting."
+    "Reference aid only. Verify grading against the study protocol, "
+    "investigator assessment, sponsor instructions, and the official "
+    "NCI CTCAE v6.0 source."
 )
