@@ -2,8 +2,18 @@ from pathlib import Path
 import sqlite3
 import streamlit as st
 
+
+# ---------------------------------------------------------
+# PATHS
+# ---------------------------------------------------------
+
 APP_DIR = Path(__file__).resolve().parent
 DB_PATH = APP_DIR / "data" / "ctcae_v6.db"
+
+
+# ---------------------------------------------------------
+# PAGE CONFIG
+# ---------------------------------------------------------
 
 st.set_page_config(
     page_title="CTCAE v6.0 Grader",
@@ -11,45 +21,10 @@ st.set_page_config(
     layout="centered",
 )
 
-st.markdown("""
-<style>
-.block-container {
-    max-width: 1000px;
-    padding-top: 2rem;
-}
 
-.grade-card {
-    border: 1px solid rgba(128,128,128,.28);
-    border-radius: 14px;
-    padding: 16px 18px;
-    margin: 10px 0;
-}
-
-.grade-title {
-    font-size: 1.15rem;
-    font-weight: 800;
-    margin-bottom: 8px;
-}
-
-.result-card {
-    border: 2px solid rgba(128,128,128,.35);
-    border-radius: 16px;
-    padding: 22px;
-    margin-top: 16px;
-}
-
-.result-grade {
-    font-size: 2.2rem;
-    font-weight: 900;
-}
-
-.small-muted {
-    opacity: .72;
-    font-size: .92rem;
-}
-</style>
-""", unsafe_allow_html=True)
-
+# ---------------------------------------------------------
+# DATABASE
+# ---------------------------------------------------------
 
 def get_connection():
     conn = sqlite3.connect(DB_PATH)
@@ -61,10 +36,16 @@ def get_connection():
 def load_socs():
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT DISTINCT soc FROM ctcae ORDER BY soc"
+            """
+            SELECT DISTINCT soc
+            FROM ctcae
+            WHERE soc IS NOT NULL
+              AND TRIM(soc) != ''
+            ORDER BY soc
+            """
         ).fetchall()
 
-    return [r["soc"] for r in rows]
+    return [row["soc"] for row in rows]
 
 
 @st.cache_data
@@ -91,7 +72,7 @@ def load_terms(soc=None):
                 """
             ).fetchall()
 
-    return [r["term"] for r in rows]
+    return [row["term"] for row in rows]
 
 
 @st.cache_data
@@ -109,59 +90,98 @@ def get_ae(term):
     return dict(row) if row else None
 
 
+# ---------------------------------------------------------
+# HEADER
+# ---------------------------------------------------------
+
 st.title("CTCAE v6.0 Grader")
 
 st.caption(
     "NCI Common Terminology Criteria for Adverse Events "
-    "— v6.0 / MedDRA 28.0"
+    "— CTCAE v6.0 / MedDRA 28.0"
 )
 
+
+# ---------------------------------------------------------
+# DATABASE CHECK
+# ---------------------------------------------------------
+
 if not DB_PATH.exists():
-    st.error("CTCAE database was not found.")
+    st.error(
+        "CTCAE database could not be found. "
+        "Expected file: data/ctcae_v6.db"
+    )
     st.stop()
 
 
+# ---------------------------------------------------------
+# FILTERS
+# ---------------------------------------------------------
+
+soc_options = ["All categories"] + load_socs()
+
 selected_soc = st.selectbox(
     "Category (SOC)",
-    ["All categories"] + load_socs(),
-    help="Optional: filter adverse events by System Organ Class."
+    options=soc_options,
+    help="Optionally filter adverse events by System Organ Class."
 )
 
+
+terms = load_terms(selected_soc)
 
 selected_term = st.selectbox(
     "Adverse Event",
-    options=load_terms(selected_soc),
+    options=terms,
     index=None,
-    placeholder="Type to search for an adverse event…"
+    placeholder="Type to search for an adverse event..."
 )
 
+
+# ---------------------------------------------------------
+# AE DETAILS
+# ---------------------------------------------------------
 
 if selected_term:
 
     ae = get_ae(selected_term)
 
+    if ae is None:
+        st.error("The selected adverse event could not be loaded.")
+        st.stop()
+
     st.divider()
 
-    st.subheader(ae["term"])
+    st.header(ae["term"])
 
-    st.markdown(
-        f"""
-        <div class="small-muted">
-        {ae["soc"]} · MedDRA LLT Code: {ae["meddra_code"]}
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+    soc = (ae.get("soc") or "").strip()
+    meddra_code = (ae.get("meddra_code") or "").strip()
 
+    meta_parts = []
+
+    if soc:
+        meta_parts.append(soc)
+
+    if meddra_code:
+        meta_parts.append(f"MedDRA LLT Code: {meddra_code}")
+
+    if meta_parts:
+        st.caption(" • ".join(meta_parts))
+
+
+    # -----------------------------------------------------
+    # DEFINITION
+    # -----------------------------------------------------
 
     definition = (ae.get("definition") or "").strip()
 
     if definition and definition != "-":
-
-        st.markdown("### Definition")
-
+        st.subheader("Definition")
         st.write(definition)
 
+
+    # -----------------------------------------------------
+    # BUILD GRADE CRITERIA
+    # -----------------------------------------------------
 
     criteria = []
 
@@ -182,108 +202,105 @@ if selected_term:
             )
 
 
-    st.markdown("### Official CTCAE v6.0 Grade Criteria")
+    # -----------------------------------------------------
+    # DISPLAY OFFICIAL CRITERIA
+    # -----------------------------------------------------
 
+    st.subheader("Official CTCAE v6.0 Grade Criteria")
 
     if not criteria:
 
         st.warning(
-            "No grade criteria are available for this CTCAE term."
+            "No grading criteria are available for this adverse event."
         )
 
     else:
 
         for item in criteria:
 
-            st.markdown(
-                f"""
-                <div class="grade-card">
+            with st.container(border=True):
 
-                    <div class="grade-title">
-                        GRADE {item["grade"]}
-                    </div>
+                st.markdown(
+                    f"### GRADE {item['grade']}"
+                )
 
-                    <div>
-                        {item["criterion"]}
-                    </div>
-
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+                st.write(
+                    item["criterion"]
+                )
 
 
-        st.markdown("### Grade the Patient")
+        # -------------------------------------------------
+        # GRADING SELECTION
+        # -------------------------------------------------
 
+        st.subheader("Grade the Patient")
 
         selected_criterion = st.selectbox(
-
             "Patient value / clinical condition",
-
             options=criteria,
-
             index=None,
-
-            format_func=lambda x: x["label"],
-
-            placeholder="Select the matching CTCAE criterion…",
-
+            format_func=lambda item: item["label"],
+            placeholder="Select the matching CTCAE criterion...",
             help=(
-                "Select the CTCAE criterion that best "
+                "Select the official CTCAE criterion that best "
                 "matches the patient's finding."
             )
         )
 
 
+        # -------------------------------------------------
+        # RESULT
+        # -------------------------------------------------
+
         if selected_criterion:
 
             grade = selected_criterion["grade"]
-
             criterion = selected_criterion["criterion"]
 
+            st.divider()
 
-            st.markdown(
-                f"""
-                <div class="result-card">
+            with st.container(border=True):
 
-                    <div class="small-muted">
-                        CTCAE v6.0 RESULT
-                    </div>
+                st.caption("CTCAE v6.0 RESULT")
 
-                    <div class="result-grade">
-                        GRADE {grade}
-                    </div>
+                st.markdown(
+                    f"# GRADE {grade}"
+                )
 
-                    <br>
+                st.markdown(
+                    "**Selected criterion**"
+                )
 
-                    <strong>Selected criterion</strong>
-
-                    <br>
-
-                    {criterion}
-
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+                st.write(
+                    criterion
+                )
 
 
-    nav = (
+    # -----------------------------------------------------
+    # NAVIGATIONAL NOTE
+    # -----------------------------------------------------
+
+    navigational_note = (
         ae.get("navigational_note") or ""
     ).strip()
 
+    if navigational_note and navigational_note != "-":
 
-    if nav and nav != "-":
+        st.subheader("Navigational Note")
 
-        st.markdown("### Navigational Note")
+        st.info(
+            navigational_note
+        )
 
-        st.info(nav)
 
+# ---------------------------------------------------------
+# FOOTER
+# ---------------------------------------------------------
 
 st.divider()
 
 st.caption(
-    "Reference aid only. Verify grading against the study protocol, "
-    "investigator assessment, sponsor instructions, and the official "
-    "NCI CTCAE v6.0 source."
+    "Reference aid only. Verify grading against the official "
+    "NCI CTCAE v6.0 source, study protocol, sponsor instructions, "
+    "and investigator assessment before clinical-trial reporting."
 )
